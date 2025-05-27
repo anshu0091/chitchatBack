@@ -45,9 +45,14 @@ const io = require('socket.io')(server, {
     },
     methods: ['GET', 'POST'],
     credentials: true
-  }
-})
+  },
+  pingTimeout: 60000,
+  pingInterval: 25000,
+  transports: ['websocket', 'polling']
+});
 
+// Keep track of connected users
+const connectedUsers = new Map();
 
 async function getLastMessagesFromRoom(room){
   let roomMessages = await Message.aggregate([
@@ -72,6 +77,20 @@ function sortRoomMessagesByDate(messages){
 // socket connection
 
 io.on('connection', (socket)=> {
+  console.log('User connected:', socket.id);
+
+  // Handle reconnection
+  socket.on('reconnect_attempt', () => {
+    console.log('Reconnection attempt');
+  });
+
+  socket.on('reconnect', () => {
+    console.log('User reconnected:', socket.id);
+    // Rejoin previous room if any
+    if (socket.lastRoom) {
+      socket.join(socket.lastRoom);
+    }
+  });
 
   socket.on('new-user', async ()=> {
     const members = await User.find();
@@ -81,6 +100,7 @@ io.on('connection', (socket)=> {
   socket.on('join-room', async(newRoom, previousRoom)=> {
     socket.join(newRoom);
     socket.leave(previousRoom);
+    socket.lastRoom = newRoom; // Store the current room
     let roomMessages = await getLastMessagesFromRoom(newRoom);
     roomMessages = sortRoomMessagesByDate(roomMessages);
     socket.emit('room-messages', roomMessages)
@@ -94,6 +114,15 @@ io.on('connection', (socket)=> {
     io.to(room).emit('room-messages', roomMessages);
     socket.broadcast.emit('notifications', room)
   })
+
+  socket.on('disconnect', () => {
+    console.log('User disconnected:', socket.id);
+  });
+
+  // Error handling
+  socket.on('error', (error) => {
+    console.error('Socket error:', error);
+  });
 
   app.delete('/logout', async(req, res)=> {
     try {
